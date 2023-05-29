@@ -1,0 +1,22 @@
+Comment: Invalidate CloudFront distribution
+StartAt: Wait
+States:
+  Wait:
+    Type: Wait
+    SecondsPath: $.wait
+    Next: Execute Consumer
+  
+  Execute Consumer:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke"
+    Parameters:
+      FunctionName: "${ConsumerFunctionName}"
+      Payload:
+        sequence.$: $.sequence
+    Retry:
+      - ErrorEquals:
+          - States.TaskFailed
+        IntervalSeconds: 60
+        MaxAttempts: 3
+        BackoffRate: 2.0
+    End: true

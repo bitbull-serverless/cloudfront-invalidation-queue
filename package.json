@@ -1,0 +1,9 @@
+{
+	"name": "sam",
+	"version": "1.0.0",
+	"private": true,
+	"devDependencies": {
+		"aws-sdk": "^2.833.0",
+		"eslint": "^7.12.0"
+	}
+}

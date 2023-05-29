@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: Cloudfront invalidation queue
+
+Parameters:
+  DistributionId:
+    Type: String
+    Description: The Cloudfront distribution id to invalidate
+  EventBusName:
+    Type: String
+    Description: The event bus from which to listen to the invalidation event
+    Default: "default"
+  BatchWindowSeconds:
+    Type: Number
+    Description: The batch window in seconds
+    Default: 300
+  BatchTTL:
+    Type: Number
+    Description: The TTL value for batch, in seconds
+    Default: 1800
+
+Globals:
+  Function:
+    Runtime: nodejs16.x
+    Timeout: 15
+    CodeUri: src/
+    Tags:
+      ServiceName: Cloudfront Invalidation
+      ServiceScope: CDN
+
+Resources:
+
+  ##
+  # Queue
+  ##
+
+  QueueTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: !Ref AWS::StackName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sequence
+          AttributeType: N
+        - AttributeName: path
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sequence
+          KeyType: HASH
+        - AttributeName: path
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  QueueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-queue"
+      Handler: events/queue.handler
+      Environment:
+        Variables:
+          TABLE_QUEUE_NAME: !Ref QueueTable
+          STATE_MACHINE_INVALIDATE_ARN: !Ref InvalidateStateMachine
+          BATCH_WINDOW_SECONDS: !Ref BatchWindowSeconds
+          BATCH_TTL_SECONDS: !Ref BatchTTL
+      Policies:
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt InvalidateStateMachine.Name
+        - DynamoDBWritePolicy:
+            TableName: !Ref QueueTable
+      Events:
+        ReceivedEvent:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              detail-type:
+                - 'Cloudfront Invalidation Request'
+
+  ##
+  # Invalidation
+  ##
+
+  ConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-consumer"
+      Handler: steps/consumer.handler
+      Environment:
+        Variables:
+          TABLE_QUEUE_NAME: !Ref QueueTable
+          DISTRIBUTION_ID: !Ref DistributionId
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref QueueTable
+        - Version: '2012-10-17' 
+          Statement:
+            - Effect: Allow
+              Action:
+                - cloudfront:CreateInvalidation
+              Resource: 
+                - !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}"
+
+  InvalidateStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-orchestrator"
+      DefinitionUri: states/invalidate.asl.yaml
+      DefinitionSubstitutions:
+        ConsumerFunctionName: !Ref ConsumerFunction
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ConsumerFunction
