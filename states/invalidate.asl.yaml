@@ -13,6 +13,7 @@ States:
       FunctionName: "${ConsumerFunctionName}"
       Payload:
         sequence.$: $.sequence
+    OutputPath: $.Payload
     Retry:
       - ErrorEquals:
           - States.TaskFailed
